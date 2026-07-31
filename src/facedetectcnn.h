@@ -347,6 +347,7 @@ class Filters{
     bool is_depthwise;
     bool is_pointwise;
     bool with_relu;
+    int profile_index;
     CDataBlob<T> weights;
     CDataBlob<T> biases;
 
@@ -357,6 +358,7 @@ class Filters{
         is_depthwise = false;
         is_pointwise = false;
         with_relu = true;
+        profile_index = -1;
     }
 
     Filters & operator=(ConvInfoStruct & convinfo)

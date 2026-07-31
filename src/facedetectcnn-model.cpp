@@ -61,7 +61,10 @@ bool param_initialized = false;
 void init_parameters()
 {
     for(int i = 0; i < NUM_CONV_LAYER; i++)
+    {
         g_pFilters[i] = param_pConvInfo[i];
+        g_pFilters[i].profile_index = i;
+    }
 }
 
 std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, int height, int step)

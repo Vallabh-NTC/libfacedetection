@@ -38,8 +38,14 @@ the use of this software, even if advised of the possibility of such damage.
 
 #include "facedetectcnn.h"
 #include <cmath>
+#include <cstdio>
 #include <float.h> //for FLT_EPSION
 #include <algorithm>//for stable_sort, sort
+#include <string>
+
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+#include "profiling/trace_recorder.hpp"
+#endif
 
 typedef struct NormalizedBBox_
 {
@@ -49,6 +55,53 @@ typedef struct NormalizedBBox_
     float ymax;
     float lm[10];
 } NormalizedBBox;
+
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+namespace {
+
+std::size_t blob_logical_bytes(const CDataBlob<float>& blob)
+{
+    return static_cast<std::size_t>(blob.rows) *
+           static_cast<std::size_t>(blob.cols) *
+           static_cast<std::size_t>(blob.channels) *
+           sizeof(float);
+}
+
+std::size_t blob_allocated_bytes(const CDataBlob<float>& blob)
+{
+    return static_cast<std::size_t>(blob.rows) *
+           static_cast<std::size_t>(blob.cols) *
+           static_cast<std::size_t>(blob.channelStep);
+}
+
+std::string convolution_layer_name(int profile_index)
+{
+    if (profile_index < 0)
+        return "conv_unindexed";
+
+    char name[32];
+    std::snprintf(
+        name,
+        sizeof(name),
+        "conv_%02d",
+        profile_index);
+
+    return name;
+}
+
+const char* convolution_operation_name(const Filters<float>& filters)
+{
+    if (filters.is_pointwise && !filters.is_depthwise)
+        return "pointwise_1x1";
+
+    if (!filters.is_pointwise && filters.is_depthwise)
+        return "depthwise_3x3";
+
+    return "unsupported";
+}
+
+}  // namespace
+#endif
 
 
 void* myAlloc(size_t size)
@@ -488,11 +541,76 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<fl
         std::cerr << __FUNCTION__ << ": The input data dimension cannot meet filters: " << inputData.channels << " vs " << filters.channels << std::endl;
         exit(1);
     }
+
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+    profiling::ScopedTraceEvent layer_event(
+        convolution_layer_name(filters.profile_index),
+        "model.layer",
+        {
+            {"layer_index", filters.profile_index},
+            {"operation", convolution_operation_name(filters)},
+            {"relu", do_relu},
+            {"filter_with_relu", filters.with_relu},
+            {"input_rows", inputData.rows},
+            {"input_cols", inputData.cols},
+            {"input_channels", inputData.channels},
+            {"input_logical_bytes", blob_logical_bytes(inputData)},
+            {"input_allocated_bytes", blob_allocated_bytes(inputData)},
+            {"output_rows", inputData.rows},
+            {"output_cols", inputData.cols},
+            {"output_channels", filters.num_filters},
+            {"weight_logical_bytes", blob_logical_bytes(filters.weights)},
+            {"weight_allocated_bytes", blob_allocated_bytes(filters.weights)},
+            {"bias_logical_bytes", blob_logical_bytes(filters.biases)},
+            {"bias_allocated_bytes", blob_allocated_bytes(filters.biases)}
+        },
+        profiling::TraceLevel::Layer);
+#endif
+
     CDataBlob<float> outputData(inputData.rows, inputData.cols, filters.num_filters);
+
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+    layer_event.set_arg(
+        "output_logical_bytes",
+        blob_logical_bytes(outputData));
+    layer_event.set_arg(
+        "output_allocated_bytes",
+        blob_allocated_bytes(outputData));
+#endif
+
     if(filters.is_pointwise && !filters.is_depthwise)
+    {
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+        profiling::ScopedTraceEvent kernel_event(
+            "pointwise_1x1_kernel",
+            "model.kernel",
+            {
+                {"layer_index", filters.profile_index},
+                {"input_channels", inputData.channels},
+                {"output_channels", outputData.channels},
+                {"rows", outputData.rows},
+                {"cols", outputData.cols}
+            },
+            profiling::TraceLevel::Kernel);
+#endif
         convolution_1x1pointwise(inputData, filters, outputData);
+    }
     else if(!filters.is_pointwise && filters.is_depthwise)
+    {
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+        profiling::ScopedTraceEvent kernel_event(
+            "depthwise_3x3_kernel",
+            "model.kernel",
+            {
+                {"layer_index", filters.profile_index},
+                {"channels", outputData.channels},
+                {"rows", outputData.rows},
+                {"cols", outputData.cols}
+            },
+            profiling::TraceLevel::Kernel);
+#endif
         convolution_3x3depthwise(inputData, filters, outputData);
+    }
     else
     {
         std::cerr << __FUNCTION__ << ": Unsupported filter type." << std::endl;
@@ -500,7 +618,19 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<fl
     }
 
     if(do_relu)
+    {
+#if defined(FACEDETECTION_ENABLE_PROFILING)
+        profiling::ScopedTraceEvent activation_event(
+            "relu",
+            "model.activation",
+            {
+                {"layer_index", filters.profile_index},
+                {"elements", blob_logical_bytes(outputData) / sizeof(float)}
+            },
+            profiling::TraceLevel::Kernel);
+#endif
         relu(outputData);
+    }
 
     return outputData;
 }
