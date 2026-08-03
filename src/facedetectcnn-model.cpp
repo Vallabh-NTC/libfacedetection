@@ -38,6 +38,7 @@ the use of this software, even if advised of the possibility of such damage.
 
 
 #include "facedetectcnn.h"
+#include "pointwise_packed4x4.hpp"
 
 
 #if 0
@@ -64,6 +65,9 @@ void init_parameters()
     {
         g_pFilters[i] = param_pConvInfo[i];
         g_pFilters[i].profile_index = i;
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+        prepare_pointwise_packed4x4(g_pFilters[i]);
+#endif
     }
 }
 

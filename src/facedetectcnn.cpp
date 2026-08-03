@@ -37,6 +37,7 @@ the use of this software, even if advised of the possibility of such damage.
 */
 
 #include "facedetectcnn.h"
+#include "pointwise_packed4x4.hpp"
 #include <cmath>
 #include <cstdio>
 #include <float.h> //for FLT_EPSION
@@ -593,7 +594,12 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<fl
             },
             profiling::TraceLevel::Kernel);
 #endif
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+        convolution_1x1pointwise_packed4x4(
+            inputData, filters, outputData);
+#else
         convolution_1x1pointwise(inputData, filters, outputData);
+#endif
     }
     else if(!filters.is_pointwise && filters.is_depthwise)
     {

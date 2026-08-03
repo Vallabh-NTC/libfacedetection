@@ -350,6 +350,9 @@ class Filters{
     int profile_index;
     CDataBlob<T> weights;
     CDataBlob<T> biases;
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+    CDataBlob<T> packed_pointwise_weights;
+#endif
 
     Filters()
     {
