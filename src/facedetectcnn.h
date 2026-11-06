@@ -452,7 +452,7 @@ public:
     static constexpr size_t storage_alignment() { return _MALLOC_ALIGN / 8; }
     static size_t required_storage_floats();
 
-    // Bind the backbone buffers once. Storage must outlive this workspace and
+    // Bind the inference tensor buffers once. Storage must outlive this workspace and
     // remain exclusive to its worker.
     bool Initialize(float* storage, size_t storage_floats);
     bool ready() const { return scratch_[0] != nullptr; }
@@ -467,6 +467,7 @@ private:
 
     float* scratch_[2]{};
     float* features_[3]{};
+    float* predictions_[3][4]{};
 };
 
 class PreparedFaceWeights
@@ -515,9 +516,14 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>& inputData);
 CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>& inputData, float* output_storage);
 
 CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2);
+CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1,
+    const CDataBlob<float>& inputData2, float* output_storage);
 CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData);
+CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData, float* output_storage);
 
 CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride, float offset=0.0f);
+CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride,
+    float offset, float* output_storage);
 
 // TODO implement in SIMD
 void bbox_decode(CDataBlob<float>& bbox_pred, const CDataBlob<float>& priors, int stride);
@@ -528,6 +534,9 @@ CDataBlob<T> blob2vector(const CDataBlob<T> &inputData);
 
 template<typename T>
 CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputData2, const CDataBlob<T>& inputData3);
+
+CDataBlob<float> flatten_predictions(const CDataBlob<float> (&predictions)[3],
+    float* output_storage);
 
 // TODO implement in SIMD
 void sigmoid(CDataBlob<float>& inputData);

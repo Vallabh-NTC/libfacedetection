@@ -65,21 +65,26 @@ size_t blob_floats(int columns, int channels)
            CDataBlob<float>::padded_channel_step(channels) / sizeof(float);
 }
 
-struct Face192BackboneLayout
+enum PredictionKind { kClass, kBox, kLandmarks, kObjectness, kPredictionKinds };
+constexpr int kPredictionLayers[] = {29, 35, 47, 41};
+
+struct Face192TensorLayout
 {
     size_t first_slot;
     size_t scratch_slot;
     size_t feature_floats[3];
+    size_t prediction_floats[3][kPredictionKinds];
 };
 
-Face192BackboneLayout face192_backbone_layout()
+Face192TensorLayout face192_tensor_layout()
 {
     constexpr int stage_ends[] = {3, 11, 15, 19, 23};
     constexpr int head_side = Face192HeadWorkspace::input_size() / 2;
-    Face192BackboneLayout layout{};
+    Face192TensorLayout layout{};
     int side = head_side;
     int layer = 0;
     size_t retained = 0;
+    int flattened_channels[kPredictionKinds]{};
     for (int stage = 0; stage < 5; ++stage) {
         const int pixels = side * side;
         for (; layer < stage_ends[stage]; ++layer) {
@@ -87,27 +92,57 @@ Face192BackboneLayout face192_backbone_layout()
                 blob_floats(pixels, param_pConvInfo[layer].num_filters));
         }
         if (stage >= 2) {
-            auto& feature = layout.feature_floats[stage - 2];
-            feature = blob_floats(pixels, param_pConvInfo[layer - 1].num_filters);
+            const int level = stage - 2;
+            auto& feature = layout.feature_floats[level];
+            const int lateral = 23 + 2 * level;
+            feature = blob_floats(pixels, std::max(param_pConvInfo[layer - 1].num_filters,
+                param_pConvInfo[lateral + 1].num_filters));
             retained += feature;
+            layout.scratch_slot = std::max(layout.scratch_slot, feature);
+            layout.scratch_slot = std::max(layout.scratch_slot,
+                blob_floats(pixels, param_pConvInfo[lateral].num_filters));
+            layout.scratch_slot = std::max(layout.scratch_slot, blob_floats(pixels, 2));
+            for (int kind = 0; kind < kPredictionKinds; ++kind) {
+                const int pointwise = kPredictionLayers[kind] + 2 * level;
+                const int channels = param_pConvInfo[pointwise + 1].num_filters;
+                layout.scratch_slot = std::max(layout.scratch_slot,
+                    blob_floats(pixels, param_pConvInfo[pointwise].num_filters));
+                auto& prediction = layout.prediction_floats[level][kind];
+                prediction = blob_floats(pixels, channels);
+                retained += prediction;
+                flattened_channels[kind] += pixels * channels;
+            }
         }
         side /= 2;
     }
+    size_t flattened = 0;
+    for (int channels : flattened_channels) {
+        flattened += blob_floats(1, channels);
+    }
+    layout.scratch_slot = std::max(layout.scratch_slot, flattened);
     const auto input = blob_floats(head_side * head_side, param_pConvInfo[0].channels);
     // The input tensor dies at the head convolution. Its slot can then hold
-    // one scratch tensor and all three feature maps retained for the neck.
+    // one scratch tensor, the three retained feature maps and the predictions.
     layout.first_slot = std::max(input, layout.scratch_slot + retained);
     return layout;
 }
 
-struct BackboneBuffers
+struct InferenceBuffers
 {
     float* scratch0;
     float* scratch1;
     float* fb1;
     float* fb2;
     float* fb3;
+    float* (*predictions)[kPredictionKinds];
 };
+
+CDataBlob<float> depthwise_pair(const CDataBlob<float>& input,
+    const Filters<float>* filters, bool relu, float* intermediate, float* output)
+{
+    return convolution(convolution(input, filters[0], false, intermediate),
+                       filters[1], relu, output);
+}
 
 CDataBlob<float> backbone_block(const CDataBlob<float>& input,
     const Filters<float>* filters, float* first, float* second, float* output)
@@ -144,7 +179,7 @@ struct LegacyFaceFilters
 
 std::vector<FaceRect> detect_with_filters(
     const unsigned char* rgbImageData, int width, int height, int step,
-    const Filters<float>* filters, const BackboneBuffers& buffers = {})
+    const Filters<float>* filters, const InferenceBuffers& buffers = {})
 {
     TIME_START;
     auto fx = setDataFrom3x3S2P1to1x1S1P0FromImage(
@@ -157,8 +192,7 @@ std::vector<FaceRect> detect_with_filters(
     TIME_END("conv_head");
 
     TIME_START;
-    fx = convolution(convolution(fx, filters[1], false, buffers.scratch0),
-                     filters[2], true, buffers.scratch1);
+    fx = depthwise_pair(fx, filters + 1, true, buffers.scratch0, buffers.scratch1);
     TIME_END("conv0");
 
     TIME_START;
@@ -202,65 +236,64 @@ std::vector<FaceRect> detect_with_filters(
     auto fb3 = backbone_block(fx, filters + 19, buffers.scratch0, buffers.scratch1, buffers.fb3);
     TIME_END("conv5");
 
-    CDataBlob<float> pred_reg[3], pred_cls[3], pred_kps[3], pred_obj[3];
+    CDataBlob<float> predictions[kPredictionKinds][3];
+    const auto predict = [&](const CDataBlob<float>& feature, int level) {
+        for (int kind = 0; kind < kPredictionKinds; ++kind) {
+            const int layer = kPredictionLayers[kind] + 2 * level;
+            float* output = buffers.predictions ? buffers.predictions[level][kind] : nullptr;
+            predictions[kind][level] = depthwise_pair(
+                feature, filters + layer, false, buffers.scratch0, output);
+        }
+    };
     /***************branch5*********************/
     TIME_START;
-    fb3 = convolutionDP(fb3, filters[27], filters[28]);
-    pred_cls[2] = convolutionDP(fb3, filters[33], filters[34], false);
-    pred_reg[2] = convolutionDP(fb3, filters[39], filters[40], false);
-    pred_kps[2] = convolutionDP(fb3, filters[51], filters[52], false);
-    pred_obj[2] = convolutionDP(fb3, filters[45], filters[46], false);
+    fb3 = depthwise_pair(fb3, filters + 27, true, buffers.scratch0, buffers.fb3);
+    predict(fb3, 2);
     TIME_END("branch5");
 
     /*****************add5*********************/    
     TIME_START;
-    fb2 = elementAdd(upsampleX2(fb3), fb2);
+    fb2 = elementAdd(upsampleX2(fb3, buffers.scratch0), fb2, buffers.scratch1);
     TIME_END("add5");
 
     /*****************add6*********************/    
     TIME_START;
-    fb2 = convolutionDP(fb2, filters[25], filters[26]);
-    pred_cls[1] = convolutionDP(fb2, filters[31], filters[32], false);
-    pred_reg[1] = convolutionDP(fb2, filters[37], filters[38], false);
-    pred_kps[1] = convolutionDP(fb2, filters[49], filters[50], false);
-    pred_obj[1] = convolutionDP(fb2, filters[43], filters[44], false);
+    fb2 = depthwise_pair(fb2, filters + 25, true, buffers.scratch0, buffers.fb2);
+    predict(fb2, 1);
     TIME_END("branch4");
 
     /*****************add4*********************/
     TIME_START;
-    fb1 = elementAdd(upsampleX2(fb2), fb1);
+    fb1 = elementAdd(upsampleX2(fb2, buffers.scratch0), fb1, buffers.scratch1);
     TIME_END("add4");
 
     /***************branch3*********************/
     TIME_START;
-    fb1 = convolutionDP(fb1, filters[23], filters[24]);
-    pred_cls[0] = convolutionDP(fb1, filters[29], filters[30], false);
-    pred_reg[0] = convolutionDP(fb1, filters[35], filters[36], false);
-    pred_kps[0] = convolutionDP(fb1, filters[47], filters[48], false);
-    pred_obj[0] = convolutionDP(fb1, filters[41], filters[42], false);
+    fb1 = depthwise_pair(fb1, filters + 23, true, buffers.scratch0, buffers.fb1);
+    predict(fb1, 0);
     TIME_END("branch3");
     
     /***************PRIORBOX*********************/
     TIME_START;
-    auto prior3 = meshgrid(fb1.cols, fb1.rows, 8);
-    auto prior4 = meshgrid(fb2.cols, fb2.rows, 16);
-    auto prior5 = meshgrid(fb3.cols, fb3.rows, 32);
-    TIME_END("prior");
-    /***************PRIORBOX*********************/
-
-    TIME_START;
-    bbox_decode(pred_reg[0], prior3, 8);
-    bbox_decode(pred_reg[1], prior4, 16);
-    bbox_decode(pred_reg[2], prior5, 32);
-
-    kps_decode(pred_kps[0], prior3, 8);
-    kps_decode(pred_kps[1], prior4, 16);
-    kps_decode(pred_kps[2], prior5, 32);
-
-    auto cls = concat3(blob2vector(pred_cls[0]), blob2vector(pred_cls[1]), blob2vector(pred_cls[2]));
-    auto reg = concat3(blob2vector(pred_reg[0]), blob2vector(pred_reg[1]), blob2vector(pred_reg[2]));
-    auto kps = concat3(blob2vector(pred_kps[0]), blob2vector(pred_kps[1]), blob2vector(pred_kps[2]));
-    auto obj = concat3(blob2vector(pred_obj[0]), blob2vector(pred_obj[1]), blob2vector(pred_obj[2]));
+    for (int level = 0; level < 3; ++level) {
+        const int stride = 8 << level;
+        auto& boxes = predictions[kBox][level];
+        const auto priors = meshgrid(boxes.cols, boxes.rows, stride, 0.0f, buffers.scratch0);
+        bbox_decode(boxes, priors, stride);
+        kps_decode(predictions[kLandmarks][level], priors, stride);
+    }
+    float* next = buffers.scratch1;
+    const auto flatten = [&](PredictionKind kind) {
+        auto output = flatten_predictions(predictions[kind], next);
+        if (next) {
+            next += blob_floats(1, output.channels);
+        }
+        return output;
+    };
+    auto cls = flatten(kClass);
+    auto reg = flatten(kBox);
+    auto kps = flatten(kLandmarks);
+    auto obj = flatten(kObjectness);
 
     sigmoid(cls);
     sigmoid(obj);
@@ -276,13 +309,13 @@ std::vector<FaceRect> detect_with_filters(
 
 size_t Face192HeadWorkspace::required_storage_floats()
 {
-    const auto layout = face192_backbone_layout();
+    const auto layout = face192_tensor_layout();
     return layout.first_slot + layout.scratch_slot;
 }
 
 bool Face192HeadWorkspace::Initialize(float* storage, size_t storage_floats)
 {
-    const auto layout = face192_backbone_layout();
+    const auto layout = face192_tensor_layout();
     if (ready() || !storage ||
         reinterpret_cast<std::uintptr_t>(storage) % storage_alignment() != 0 ||
         storage_floats < layout.first_slot + layout.scratch_slot) {
@@ -293,6 +326,13 @@ bool Face192HeadWorkspace::Initialize(float* storage, size_t storage_floats)
     features_[0] = storage + layout.scratch_slot;
     features_[1] = features_[0] + layout.feature_floats[0];
     features_[2] = features_[1] + layout.feature_floats[1];
+    float* next = features_[2] + layout.feature_floats[2];
+    for (int level = 0; level < 3; ++level) {
+        for (int kind = 0; kind < kPredictionKinds; ++kind) {
+            predictions_[level][kind] = next;
+            next += layout.prediction_floats[level][kind];
+        }
+    }
     return true;
 }
 
@@ -378,7 +418,8 @@ std::vector<FaceRect> objectdetect_cnn_face192(
     }
     return detect_with_filters(data, size, size, step, weights.filters_,
         {workspace.scratch_[0], workspace.scratch_[1],
-         workspace.features_[0], workspace.features_[1], workspace.features_[2]});
+         workspace.features_[0], workspace.features_[1], workspace.features_[2],
+         workspace.predictions_});
 }
 
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!

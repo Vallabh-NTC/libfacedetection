@@ -496,12 +496,16 @@ bool SortScoreBBoxPairDescend(const std::pair<float, NormalizedBBox>& pair1,   c
 
 
 CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData) {
+    return upsampleX2(inputData, nullptr);
+}
+
+CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData, float* output_storage) {
     if (inputData.isEmpty()) {
         std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
         exit(1);
     }
 
-    CDataBlob<float> outData(inputData.rows * 2, inputData.cols * 2, inputData.channels);
+    CDataBlob<float> outData(inputData.rows * 2, inputData.cols * 2, inputData.channels, output_storage);
 
     for (int r = 0; r < inputData.rows; r++) {
         for (int c = 0; c < inputData.cols; c++) {
@@ -520,11 +524,16 @@ CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData) {
 }
 
 CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2) {
+    return elementAdd(inputData1, inputData2, nullptr);
+}
+
+CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1,
+    const CDataBlob<float>& inputData2, float* output_storage) {
     if (inputData1.rows != inputData2.rows || inputData1.cols != inputData2.cols || inputData1.channels != inputData2.channels) {
         std::cerr << __FUNCTION__ << ": The two input datas must be in the same shape." << std::endl;
         exit(1);
     }
-    CDataBlob<float> outData(inputData1.rows, inputData1.cols, inputData1.channels);
+    CDataBlob<float> outData(inputData1.rows, inputData1.cols, inputData1.channels, output_storage);
     for (int r = 0; r < inputData1.rows; r++) {
         for (int c = 0; c < inputData1.cols; c++) {
             const float * pIn1 = inputData1.ptr(r, c);
@@ -773,7 +782,12 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData, float* output
 }
 
 CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride, float offset) {
-    CDataBlob<float> out(feature_height, feature_width, 2);
+    return meshgrid(feature_width, feature_height, stride, offset, nullptr);
+}
+
+CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride,
+    float offset, float* output_storage) {
+    CDataBlob<float> out(feature_height, feature_width, 2, output_storage);
     for(int r = 0; r < feature_height; ++r) {
         float rx = (float)(r * stride) + offset;
         for(int c = 0; c < feature_width; ++c) {
@@ -882,6 +896,21 @@ CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputDa
 }
 template CDataBlob<float> concat3(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2, const CDataBlob<float>& inputData3);
 
+namespace {
+
+template<typename T>
+void copy_flattened(const CDataBlob<T>& input, T* output)
+{
+    for (int row = 0; row < input.rows; ++row) {
+        for (int col = 0; col < input.cols; ++col) {
+            memcpy(output, input.ptr(row, col), input.channels * sizeof(T));
+            output += input.channels;
+        }
+    }
+}
+
+}  // namespace
+
 template<typename T>
 CDataBlob<T> blob2vector(const CDataBlob<T> &inputData)
 {
@@ -893,21 +922,30 @@ CDataBlob<T> blob2vector(const CDataBlob<T> &inputData)
 
     CDataBlob<T> outputData(1, 1, inputData.cols * inputData.rows * inputData.channels);
 
-    int bytesOfAChannel = inputData.channels * sizeof(T);
-    T * pOut = outputData.ptr(0,0);
-    for (int row = 0; row < inputData.rows; row++)
-    {
-        for (int col = 0; col < inputData.cols; col++)
-        {
-            const T * pIn = inputData.ptr(row, col);
-            memcpy(pOut, pIn, bytesOfAChannel);
-            pOut += inputData.channels;
-        }
-    }
-
+    copy_flattened(inputData, outputData.ptr(0, 0));
     return outputData;
 }
 template CDataBlob<float> blob2vector(const CDataBlob<float>& inputData);
+
+CDataBlob<float> flatten_predictions(const CDataBlob<float> (&predictions)[3],
+    float* output_storage)
+{
+    if (!output_storage) {
+        return concat3(blob2vector(predictions[0]), blob2vector(predictions[1]),
+                       blob2vector(predictions[2]));
+    }
+    int channels = 0;
+    for (const auto& prediction : predictions) {
+        channels += prediction.rows * prediction.cols * prediction.channels;
+    }
+    CDataBlob<float> output(1, 1, channels, output_storage);
+    float* next = output.data;
+    for (const auto& prediction : predictions) {
+        copy_flattened(prediction, next);
+        next += prediction.rows * prediction.cols * prediction.channels;
+    }
+    return output;
+}
 
 void sigmoid(CDataBlob<float>& inputData) {
     for(int r = 0; r < inputData.rows; ++r) {
