@@ -134,6 +134,8 @@ typedef struct ConvInfoStruct_ {
 template <typename T>
 class CDataBlob
 {
+    bool owns_data_ = true;
+
 public:
 	int rows;
 	int cols;
@@ -162,6 +164,7 @@ public:
 	}
 
     CDataBlob(CDataBlob<T> &&other) {
+        owns_data_ = other.owns_data_;
         data = other.data;
         other.data = nullptr;
         rows = other.rows;
@@ -178,8 +181,9 @@ public:
 
     void setNULL()
     {
-        if (data)
+        if (data && owns_data_)
             myFree(&data);
+        owns_data_ = true;
         rows = cols = channels = channelStep = 0;
         data = nullptr;
     }
@@ -195,6 +199,25 @@ public:
         return (rows <= 0 || cols <= 0 || channels == 0 || data == nullptr);
     }
 
+    static int padded_channel_step(int ch)
+    {
+        const int bytes = ch * sizeof(T);
+        const int alignment = _MALLOC_ALIGN / 8;
+        return (bytes + alignment - 1) / alignment * alignment;
+    }
+
+    // Caller supplies enough aligned storage for the padded layout.
+    void bind(int r, int c, int ch, T* storage)
+    {
+        setNULL();
+        rows = r;
+        cols = c;
+        channels = ch;
+        channelStep = padded_channel_step(ch);
+        data = storage;
+        owns_data_ = false;
+    }
+
 	bool create(int r, int c, int ch)
 	{
         setNULL();
@@ -204,11 +227,7 @@ public:
         channels = ch;
 
         //alloc space for int8 array
-        int remBytes = (sizeof(T)* channels) % (_MALLOC_ALIGN / 8);
-        if (remBytes == 0)
-            this->channelStep = channels * sizeof(T);
-        else
-            this->channelStep = (channels * sizeof(T)) + (_MALLOC_ALIGN / 8) - remBytes;
+        this->channelStep = padded_channel_step(channels);
         data = (T*)myAlloc(size_t(rows) * cols * this->channelStep);
 
         if (data == nullptr)
@@ -364,6 +383,23 @@ class Filters{
         profile_index = -1;
     }
 
+    void set_metadata(const ConvInfoStruct& convinfo)
+    {
+        channels = convinfo.channels;
+        num_filters = convinfo.num_filters;
+        is_depthwise = convinfo.is_depthwise;
+        is_pointwise = convinfo.is_pointwise;
+        with_relu = convinfo.with_relu;
+    }
+
+    void copy_parameters(const ConvInfoStruct& convinfo)
+    {
+        for (int fidx = 0; fidx < weights.cols; ++fidx)
+            memcpy(weights.ptr(0, fidx), convinfo.pWeights + channels * fidx,
+                   channels * sizeof(T));
+        memcpy(biases.ptr(0, 0), convinfo.pBiases, num_filters * sizeof(T));
+    }
+
     Filters & operator=(ConvInfoStruct & convinfo)
     {
         if (typeid(float) != typeid(T))
@@ -378,11 +414,7 @@ class Filters{
             return *this;
         }
 
-        this->channels = convinfo.channels;
-        this->num_filters =  convinfo.num_filters;
-        this->is_depthwise = convinfo.is_depthwise;
-        this->is_pointwise = convinfo.is_pointwise;
-        this->with_relu = convinfo.with_relu;
+        set_metadata(convinfo);
 
         if(!this->is_depthwise && this->is_pointwise) //1x1 point wise
         {
@@ -400,19 +432,41 @@ class Filters{
 
         this->biases.create(1, 1, num_filters);
 
-        //the format of convinfo.pWeights/biases must meet the format in this->weigths/biases
-        for(int fidx = 0; fidx < this->weights.cols; fidx++)
-            memcpy(this->weights.ptr(0,fidx), 
-                    convinfo.pWeights + channels * fidx , 
-                    channels * sizeof(T));
-        memcpy(this->biases.ptr(0,0), convinfo.pBiases, sizeof(T) * this->num_filters);
+        copy_parameters(convinfo);
 
         return *this;
     }
 
 };
 
+constexpr int kFaceConvLayers = 53;
+
+class PreparedFaceWeights
+{
+public:
+    PreparedFaceWeights() = default;
+    PreparedFaceWeights(const PreparedFaceWeights&) = delete;
+    PreparedFaceWeights& operator=(const PreparedFaceWeights&) = delete;
+
+    static constexpr size_t storage_alignment() { return _MALLOC_ALIGN / 8; }
+    static size_t required_storage_floats();
+
+    // Initialize once. Keep the aligned float storage alive and immutable
+    // after initialization, for as long as this context or its users exist.
+    bool Initialize(float* storage, size_t storage_floats);
+    bool ready() const { return ready_; }
+
+private:
+    friend std::vector<FaceRect> objectdetect_cnn(
+        const unsigned char*, int, int, int, const PreparedFaceWeights&);
+
+    Filters<float> filters_[kFaceConvLayers];
+    bool ready_ = false;
+};
+
 std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData, int with, int height, int step);
+std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData,
+    int width, int height, int step, const PreparedFaceWeights& weights);
 
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData, int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor=32);
 CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<float>& filters, bool do_relu = true);

@@ -49,7 +49,12 @@ void prepare_pointwise_packed4x4(Filters<float>& filters)
             1, 1, static_cast<int>(packed_count))) {
         return;
     }
+    pack_pointwise_4x4_weights(filters);
+}
 
+void pack_pointwise_4x4_weights(Filters<float>& filters)
+{
+    const int output_blocks = filters.num_filters / 4;
     float* packed = filters.packed_pointwise_weights.data;
 
     for (int block = 0; block < output_blocks; ++block) {

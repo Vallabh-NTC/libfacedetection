@@ -40,6 +40,9 @@ the use of this software, even if advised of the possibility of such damage.
 #include "facedetectcnn.h"
 #include "pointwise_packed4x4.hpp"
 
+#include <algorithm>
+#include <cstdint>
+
 
 #if 0
 #include <opencv2/opencv.hpp>
@@ -52,48 +55,55 @@ cv::TickMeter cvtm;
 #endif
 
 
-#define NUM_CONV_LAYER 53
+extern ConvInfoStruct param_pConvInfo[kFaceConvLayers];
 
-extern ConvInfoStruct param_pConvInfo[NUM_CONV_LAYER];
-Filters<float> g_pFilters[NUM_CONV_LAYER];
+namespace {
 
-bool param_initialized = false;
-
-void init_parameters()
+size_t blob_floats(int columns, int channels)
 {
-    for(int i = 0; i < NUM_CONV_LAYER; i++)
-    {
-        g_pFilters[i] = param_pConvInfo[i];
-        g_pFilters[i].profile_index = i;
-#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
-        prepare_pointwise_packed4x4(g_pFilters[i]);
-#endif
-    }
+    return static_cast<size_t>(columns) *
+           CDataBlob<float>::padded_channel_step(channels) / sizeof(float);
 }
 
-std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, int height, int step)
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+int packed_channels(const ConvInfoStruct& layer)
 {
+    return layer.is_pointwise && !layer.is_depthwise
+        ? (layer.num_filters / 4) * layer.channels * 4 : 0;
+}
+#endif
 
-    TIME_START;
-    if (!param_initialized)
+struct LegacyFaceFilters
+{
+    Filters<float> filters[kFaceConvLayers];
+
+    LegacyFaceFilters()
     {
-        init_parameters();
-        param_initialized = true;
+        for (int i = 0; i < kFaceConvLayers; ++i) {
+            filters[i] = param_pConvInfo[i];
+            filters[i].profile_index = i;
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+            prepare_pointwise_packed4x4(filters[i]);
+#endif
+        }
     }
-    TIME_END("init");
+};
 
-
+std::vector<FaceRect> detect_with_filters(
+    const unsigned char* rgbImageData, int width, int height, int step,
+    const Filters<float>* filters)
+{
     TIME_START;
     auto fx = setDataFrom3x3S2P1to1x1S1P0FromImage(rgbImageData, width, height, 3, step);
     TIME_END("convert data");
 
     /***************CONV0*********************/
     TIME_START;
-    fx = convolution(fx, g_pFilters[0]);
+    fx = convolution(fx, filters[0]);
     TIME_END("conv_head");
 
     TIME_START;
-    fx = convolutionDP(fx, g_pFilters[1], g_pFilters[2]);
+    fx = convolutionDP(fx, filters[1], filters[2]);
     TIME_END("conv0");
 
     TIME_START;
@@ -102,12 +112,12 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
 
     /***************CONV1*********************/
     TIME_START;
-    fx = convolution4layerUnit(fx, g_pFilters[3], g_pFilters[4], g_pFilters[5], g_pFilters[6]);
+    fx = convolution4layerUnit(fx, filters[3], filters[4], filters[5], filters[6]);
     TIME_END("conv1");
 
     /***************CONV2*********************/
     TIME_START;
-    fx = convolution4layerUnit(fx, g_pFilters[7], g_pFilters[8], g_pFilters[9], g_pFilters[10]);
+    fx = convolution4layerUnit(fx, filters[7], filters[8], filters[9], filters[10]);
     TIME_END("conv2");
 
     /***************CONV3*********************/
@@ -116,7 +126,7 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
     TIME_END("pool3");
 
     TIME_START;
-    auto fb1 = convolution4layerUnit(fx, g_pFilters[11], g_pFilters[12], g_pFilters[13], g_pFilters[14]);
+    auto fb1 = convolution4layerUnit(fx, filters[11], filters[12], filters[13], filters[14]);
     TIME_END("conv3");
 
     /***************CONV4*********************/
@@ -125,7 +135,7 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
     TIME_END("pool4");
 
     TIME_START;
-    auto fb2 = convolution4layerUnit(fx, g_pFilters[15], g_pFilters[16], g_pFilters[17], g_pFilters[18]);
+    auto fb2 = convolution4layerUnit(fx, filters[15], filters[16], filters[17], filters[18]);
     TIME_END("conv4");
 
     /***************CONV5*********************/
@@ -134,17 +144,17 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
     TIME_END("pool5");
 
     TIME_START;
-    auto fb3 = convolution4layerUnit(fx, g_pFilters[19], g_pFilters[20], g_pFilters[21], g_pFilters[22]);
+    auto fb3 = convolution4layerUnit(fx, filters[19], filters[20], filters[21], filters[22]);
     TIME_END("conv5");
 
     CDataBlob<float> pred_reg[3], pred_cls[3], pred_kps[3], pred_obj[3];
     /***************branch5*********************/
     TIME_START;
-    fb3 = convolutionDP(fb3, g_pFilters[27], g_pFilters[28]);
-    pred_cls[2] = convolutionDP(fb3, g_pFilters[33], g_pFilters[34], false);
-    pred_reg[2] = convolutionDP(fb3, g_pFilters[39], g_pFilters[40], false);
-    pred_kps[2] = convolutionDP(fb3, g_pFilters[51], g_pFilters[52], false);
-    pred_obj[2] = convolutionDP(fb3, g_pFilters[45], g_pFilters[46], false);
+    fb3 = convolutionDP(fb3, filters[27], filters[28]);
+    pred_cls[2] = convolutionDP(fb3, filters[33], filters[34], false);
+    pred_reg[2] = convolutionDP(fb3, filters[39], filters[40], false);
+    pred_kps[2] = convolutionDP(fb3, filters[51], filters[52], false);
+    pred_obj[2] = convolutionDP(fb3, filters[45], filters[46], false);
     TIME_END("branch5");
 
     /*****************add5*********************/    
@@ -154,11 +164,11 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
 
     /*****************add6*********************/    
     TIME_START;
-    fb2 = convolutionDP(fb2, g_pFilters[25], g_pFilters[26]);
-    pred_cls[1] = convolutionDP(fb2, g_pFilters[31], g_pFilters[32], false);
-    pred_reg[1] = convolutionDP(fb2, g_pFilters[37], g_pFilters[38], false);
-    pred_kps[1] = convolutionDP(fb2, g_pFilters[49], g_pFilters[50], false);
-    pred_obj[1] = convolutionDP(fb2, g_pFilters[43], g_pFilters[44], false);
+    fb2 = convolutionDP(fb2, filters[25], filters[26]);
+    pred_cls[1] = convolutionDP(fb2, filters[31], filters[32], false);
+    pred_reg[1] = convolutionDP(fb2, filters[37], filters[38], false);
+    pred_kps[1] = convolutionDP(fb2, filters[49], filters[50], false);
+    pred_obj[1] = convolutionDP(fb2, filters[43], filters[44], false);
     TIME_END("branch4");
 
     /*****************add4*********************/
@@ -168,11 +178,11 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
 
     /***************branch3*********************/
     TIME_START;
-    fb1 = convolutionDP(fb1, g_pFilters[23], g_pFilters[24]);
-    pred_cls[0] = convolutionDP(fb1, g_pFilters[29], g_pFilters[30], false);
-    pred_reg[0] = convolutionDP(fb1, g_pFilters[35], g_pFilters[36], false);
-    pred_kps[0] = convolutionDP(fb1, g_pFilters[47], g_pFilters[48], false);
-    pred_obj[0] = convolutionDP(fb1, g_pFilters[41], g_pFilters[42], false);
+    fb1 = convolutionDP(fb1, filters[23], filters[24]);
+    pred_cls[0] = convolutionDP(fb1, filters[29], filters[30], false);
+    pred_reg[0] = convolutionDP(fb1, filters[35], filters[36], false);
+    pred_kps[0] = convolutionDP(fb1, filters[47], filters[48], false);
+    pred_obj[0] = convolutionDP(fb1, filters[41], filters[42], false);
     TIME_END("branch3");
     
     /***************PRIORBOX*********************/
@@ -205,6 +215,80 @@ std::vector<FaceRect> objectdetect_cnn(unsigned char * rgbImageData, int width, 
     std::vector<FaceRect> facesInfo = detection_output(cls, reg, kps, obj, 0.45f, 0.2f, 1000, 512);
     TIME_END("detection output")
     return facesInfo;
+}
+
+}  // namespace
+
+size_t PreparedFaceWeights::required_storage_floats()
+{
+    size_t count = 0;
+    for (const auto& layer : param_pConvInfo) {
+        count += blob_floats(layer.is_depthwise ? 9 : layer.num_filters, layer.channels);
+        count += blob_floats(1, layer.num_filters);
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+        count += blob_floats(1, packed_channels(layer));
+#endif
+    }
+    return count;
+}
+
+bool PreparedFaceWeights::Initialize(float* storage, size_t storage_floats)
+{
+    const auto required = required_storage_floats();
+    if (ready_ || !storage ||
+        reinterpret_cast<std::uintptr_t>(storage) % storage_alignment() != 0 ||
+        storage_floats < required) {
+        return false;
+    }
+    std::fill_n(storage, required, 0.0f);
+
+    for (int i = 0; i < kFaceConvLayers; ++i) {
+        const auto& layer = param_pConvInfo[i];
+        auto& filter = filters_[i];
+        filter.set_metadata(layer);
+        filter.profile_index = i;
+
+        const int columns = layer.is_depthwise ? 9 : layer.num_filters;
+        filter.weights.bind(1, columns, layer.channels, storage);
+        storage += blob_floats(columns, layer.channels);
+        filter.biases.bind(1, 1, layer.num_filters, storage);
+        storage += blob_floats(1, layer.num_filters);
+        filter.copy_parameters(layer);
+
+#if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
+        const int packed = packed_channels(layer);
+        if (packed != 0) {
+            filter.packed_pointwise_weights.bind(1, 1, packed, storage);
+            storage += blob_floats(1, packed);
+            pack_pointwise_4x4_weights(filter);
+        }
+#endif
+    }
+    ready_ = true;
+    return true;
+}
+
+std::vector<FaceRect> objectdetect_cnn(
+    const unsigned char* data, int width, int height, int step)
+{
+    static const LegacyFaceFilters weights;
+    return detect_with_filters(data, width, height, step, weights.filters);
+}
+
+std::vector<FaceRect> objectdetect_cnn(
+    unsigned char* data, int width, int height, int step)
+{
+    return objectdetect_cnn(static_cast<const unsigned char*>(data), width, height, step);
+}
+
+std::vector<FaceRect> objectdetect_cnn(
+    const unsigned char* data, int width, int height, int step,
+    const PreparedFaceWeights& weights)
+{
+    if (!weights.ready()) {
+        return {};
+    }
+    return detect_with_filters(data, width, height, step, weights.filters_);
 }
 
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!
