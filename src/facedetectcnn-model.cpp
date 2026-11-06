@@ -177,7 +177,15 @@ struct LegacyFaceFilters
     }
 };
 
-std::vector<FaceRect> detect_with_filters(
+struct DecodedPredictions
+{
+    CDataBlob<float> cls;
+    CDataBlob<float> reg;
+    CDataBlob<float> kps;
+    CDataBlob<float> obj;
+};
+
+DecodedPredictions decode_with_filters(
     const unsigned char* rgbImageData, int width, int height, int step,
     const Filters<float>* filters, const InferenceBuffers& buffers = {})
 {
@@ -290,19 +298,24 @@ std::vector<FaceRect> detect_with_filters(
         }
         return output;
     };
-    auto cls = flatten(kClass);
-    auto reg = flatten(kBox);
-    auto kps = flatten(kLandmarks);
-    auto obj = flatten(kObjectness);
-
-    sigmoid(cls);
-    sigmoid(obj);
+    DecodedPredictions decoded{
+        flatten(kClass), flatten(kBox), flatten(kLandmarks), flatten(kObjectness)};
+    sigmoid(decoded.cls);
+    sigmoid(decoded.obj);
     TIME_END("decode")
+    return decoded;
+}
 
+std::vector<FaceRect> detect_with_filters(
+    const unsigned char* data, int width, int height, int step,
+    const Filters<float>* filters, const InferenceBuffers& buffers = {})
+{
+    const auto decoded = decode_with_filters(data, width, height, step, filters, buffers);
     TIME_START;
-    std::vector<FaceRect> facesInfo = detection_output(cls, reg, kps, obj, 0.45f, 0.2f, 1000, 512);
+    auto faces = detection_output(decoded.cls, decoded.reg, decoded.kps, decoded.obj,
+                                  0.45f, 0.2f, 1000, 512);
     TIME_END("detection output")
-    return facesInfo;
+    return faces;
 }
 
 }  // namespace
@@ -420,6 +433,22 @@ std::vector<FaceRect> objectdetect_cnn_face192(
         {workspace.scratch_[0], workspace.scratch_[1],
          workspace.features_[0], workspace.features_[1], workspace.features_[2],
          workspace.predictions_});
+}
+
+bool objectdetect_cnn_face192_into(const unsigned char* data, int step,
+    const PreparedFaceWeights& weights, Face192HeadWorkspace& workspace,
+    Face192PostprocessWorkspace& postprocess)
+{
+    constexpr int size = Face192HeadWorkspace::input_size();
+    if (!data || step < size * 3 || !weights.ready() || !workspace.ready()) {
+        postprocess.count_ = 0;
+        return false;
+    }
+    const auto decoded = decode_with_filters(data, size, size, step, weights.filters_,
+        {workspace.scratch_[0], workspace.scratch_[1],
+         workspace.features_[0], workspace.features_[1], workspace.features_[2],
+         workspace.predictions_});
+    return postprocess.Decode(decoded.cls, decoded.reg, decoded.kps, decoded.obj);
 }
 
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!

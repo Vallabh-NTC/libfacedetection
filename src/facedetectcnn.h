@@ -444,6 +444,7 @@ class Filters{
 constexpr int kFaceConvLayers = 53;
 
 class PreparedFaceWeights;
+class Face192PostprocessWorkspace;
 
 class Face192HeadWorkspace
 {
@@ -464,6 +465,8 @@ public:
 private:
     friend std::vector<FaceRect> objectdetect_cnn_face192(
         const unsigned char*, int, const PreparedFaceWeights&, Face192HeadWorkspace&);
+    friend bool objectdetect_cnn_face192_into(const unsigned char*, int,
+        const PreparedFaceWeights&, Face192HeadWorkspace&, Face192PostprocessWorkspace&);
 
     float* scratch_[2]{};
     float* features_[3]{};
@@ -490,9 +493,37 @@ private:
         const unsigned char*, int, int, int, const PreparedFaceWeights&);
     friend std::vector<FaceRect> objectdetect_cnn_face192(
         const unsigned char*, int, const PreparedFaceWeights&, Face192HeadWorkspace&);
+    friend bool objectdetect_cnn_face192_into(const unsigned char*, int,
+        const PreparedFaceWeights&, Face192HeadWorkspace&, Face192PostprocessWorkspace&);
 
     Filters<float> filters_[kFaceConvLayers];
     bool ready_ = false;
+};
+
+// Each worker owns a separate instance, with storage for all face192 anchors.
+class Face192PostprocessWorkspace
+{
+    static constexpr int kAnchorCapacity = 24 * 24 + 12 * 12 + 6 * 6;
+    static constexpr size_t kResultCapacity = 512;
+
+public:
+    static constexpr int anchor_capacity() { return kAnchorCapacity; }
+    static constexpr size_t result_capacity() { return kResultCapacity; }
+
+    bool Decode(const CDataBlob<float>& cls, const CDataBlob<float>& reg,
+        const CDataBlob<float>& kps, const CDataBlob<float>& obj);
+    const FaceRect* results() const { return results_; }
+    size_t count() const { return count_; }
+
+private:
+    friend bool objectdetect_cnn_face192_into(const unsigned char*, int,
+        const PreparedFaceWeights&, Face192HeadWorkspace&, Face192PostprocessWorkspace&);
+
+    struct Candidate { float score; int anchor; };
+    Candidate candidates_[kAnchorCapacity];
+    Candidate sort_scratch_[kAnchorCapacity];
+    FaceRect results_[kResultCapacity];
+    size_t count_ = 0;
 };
 
 std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData, int with, int height, int step);
@@ -500,6 +531,9 @@ std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData,
     int width, int height, int step, const PreparedFaceWeights& weights);
 std::vector<FaceRect> objectdetect_cnn_face192(const unsigned char* rgbImageData,
     int step, const PreparedFaceWeights& weights, Face192HeadWorkspace& workspace);
+bool objectdetect_cnn_face192_into(const unsigned char* rgbImageData,
+    int step, const PreparedFaceWeights& weights, Face192HeadWorkspace& workspace,
+    Face192PostprocessWorkspace& postprocess);
 
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData, int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor=32);
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData,

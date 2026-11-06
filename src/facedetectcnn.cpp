@@ -961,6 +961,24 @@ void sigmoid(CDataBlob<float>& inputData) {
     }
 }
 
+namespace {
+
+FaceRect make_face_rect(float score, const NormalizedBBox& box)
+{
+    FaceRect face;
+    face.score = score;
+    face.x = int(box.xmin);
+    face.y = int(box.ymin);
+    face.w = int(box.xmax - box.xmin);
+    face.h = int(box.ymax - box.ymin);
+    for (int i = 0; i < 10; ++i) {
+        face.lm[i] = int(box.lm[i]);
+    }
+    return face;
+}
+
+}  // namespace
+
 std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
                       const CDataBlob<float>& reg,
                       const CDataBlob<float>& kps,
@@ -1054,20 +1072,85 @@ std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
     std::vector<FaceRect> facesInfo;
     for (int fi = 0; fi < num_faces; fi++)
     {
-        std::pair<float, NormalizedBBox> pp = final_score_bbox_vec[fi];
-
-        FaceRect r;
-        r.score = pp.first;
-        r.x = int(pp.second.xmin);
-        r.y = int(pp.second.ymin);
-        r.w = int(pp.second.xmax - pp.second.xmin);
-        r.h = int(pp.second.ymax - pp.second.ymin);
-        //copy landmark data
-        for(int i = 0; i < 10; ++i) {
-            r.lm[i] = int(pp.second.lm[i]);
-        }
-        facesInfo.emplace_back(r);
+        const auto& candidate = final_score_bbox_vec[fi];
+        facesInfo.push_back(make_face_rect(candidate.first, candidate.second));
     }
 
     return facesInfo;
+}
+
+
+bool Face192PostprocessWorkspace::Decode(const CDataBlob<float>& cls,
+    const CDataBlob<float>& reg, const CDataBlob<float>& kps,
+    const CDataBlob<float>& obj)
+{
+    count_ = 0;
+    const int anchors = cls.channels;
+    const auto valid_vector = [](const CDataBlob<float>& blob, int channels) {
+        return !blob.isEmpty() && blob.rows == 1 && blob.cols == 1 &&
+               blob.channels == channels;
+    };
+    if (anchors <= 0 || anchors > anchor_capacity() ||
+        !valid_vector(cls, anchors) || !valid_vector(obj, anchors) ||
+        !valid_vector(reg, 4 * anchors) || !valid_vector(kps, 10 * anchors)) {
+        return false;
+    }
+
+    int candidates = 0;
+    for (int anchor = 0; anchor < anchors; ++anchor) {
+        const float score = std::sqrt(cls.data[anchor] * obj.data[anchor]);
+        if (score >= 0.2f) {
+            candidates_[candidates++] = {score, anchor};
+        }
+    }
+
+    // Merge into caller-owned scratch. Take the left entry on ties to preserve
+    // anchor order, as in the reference stable sort.
+    Candidate* sorted = candidates_;
+    Candidate* scratch = sort_scratch_;
+    for (int width = 1; width < candidates; width *= 2) {
+        for (int begin = 0; begin < candidates; begin += 2 * width) {
+            const int middle = std::min(begin + width, candidates);
+            const int end = std::min(begin + 2 * width, candidates);
+            int left = begin;
+            int right = middle;
+            for (int out = begin; out < end; ++out) {
+                if (left < middle && (right == end || sorted[left].score >= sorted[right].score)) {
+                    scratch[out] = sorted[left++];
+                } else {
+                    scratch[out] = sorted[right++];
+                }
+            }
+        }
+        std::swap(sorted, scratch);
+    }
+
+    const auto box_for = [&](int anchor) {
+        const float* coords = reg.data + 4 * anchor;
+        NormalizedBBox box{};
+        box.xmin = coords[0];
+        box.ymin = coords[1];
+        box.xmax = coords[2];
+        box.ymax = coords[3];
+        return box;
+    };
+    // face192 has 756 anchors, below the reference pre-NMS limit of 1000.
+    // Compact kept anchors into the consumed prefix of the sorted buffer.
+    for (int i = 0; i < candidates && count_ < result_capacity(); ++i) {
+        const auto candidate = sorted[i];
+        auto box = box_for(candidate.anchor);
+        bool keep = true;
+        for (size_t kept = 0; kept < count_; ++kept) {
+            if (!(JaccardOverlap(box, box_for(sorted[kept].anchor)) <= 0.45f)) {
+                keep = false;
+                break;
+            }
+        }
+        if (keep) {
+            memcpy(box.lm, kps.data + 10 * candidate.anchor, sizeof(box.lm));
+            sorted[count_] = candidate;
+            results_[count_++] = make_face_rect(candidate.score, box);
+        }
+    }
+    return true;
 }
