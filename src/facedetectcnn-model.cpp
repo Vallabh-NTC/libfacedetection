@@ -65,12 +65,57 @@ size_t blob_floats(int columns, int channels)
            CDataBlob<float>::padded_channel_step(channels) / sizeof(float);
 }
 
-constexpr int kFace192HeadPixels = (Face192HeadWorkspace::input_size() / 2) *
-                                    (Face192HeadWorkspace::input_size() / 2);
-
-size_t face192_head_input_floats()
+struct Face192BackboneLayout
 {
-    return blob_floats(kFace192HeadPixels, param_pConvInfo[0].channels);
+    size_t first_slot;
+    size_t scratch_slot;
+    size_t feature_floats[3];
+};
+
+Face192BackboneLayout face192_backbone_layout()
+{
+    constexpr int stage_ends[] = {3, 11, 15, 19, 23};
+    constexpr int head_side = Face192HeadWorkspace::input_size() / 2;
+    Face192BackboneLayout layout{};
+    int side = head_side;
+    int layer = 0;
+    size_t retained = 0;
+    for (int stage = 0; stage < 5; ++stage) {
+        const int pixels = side * side;
+        for (; layer < stage_ends[stage]; ++layer) {
+            layout.scratch_slot = std::max(layout.scratch_slot,
+                blob_floats(pixels, param_pConvInfo[layer].num_filters));
+        }
+        if (stage >= 2) {
+            auto& feature = layout.feature_floats[stage - 2];
+            feature = blob_floats(pixels, param_pConvInfo[layer - 1].num_filters);
+            retained += feature;
+        }
+        side /= 2;
+    }
+    const auto input = blob_floats(head_side * head_side, param_pConvInfo[0].channels);
+    // The input tensor dies at the head convolution. Its slot can then hold
+    // one scratch tensor and all three feature maps retained for the neck.
+    layout.first_slot = std::max(input, layout.scratch_slot + retained);
+    return layout;
+}
+
+struct BackboneBuffers
+{
+    float* scratch0;
+    float* scratch1;
+    float* fb1;
+    float* fb2;
+    float* fb3;
+};
+
+CDataBlob<float> backbone_block(const CDataBlob<float>& input,
+    const Filters<float>* filters, float* first, float* second, float* output)
+{
+    auto intermediate = convolution(input, filters[0], false, first);
+    intermediate = convolution(intermediate, filters[1], true, second);
+    intermediate = convolution(intermediate, filters[2], false, first);
+    return convolution(intermediate, filters[3], true, output);
 }
 
 #if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
@@ -99,61 +144,62 @@ struct LegacyFaceFilters
 
 std::vector<FaceRect> detect_with_filters(
     const unsigned char* rgbImageData, int width, int height, int step,
-    const Filters<float>* filters, float* head_input = nullptr, float* head_output = nullptr)
+    const Filters<float>* filters, const BackboneBuffers& buffers = {})
 {
     TIME_START;
     auto fx = setDataFrom3x3S2P1to1x1S1P0FromImage(
-        rgbImageData, width, height, 3, step, 32, head_input);
+        rgbImageData, width, height, 3, step, 32, buffers.scratch0);
     TIME_END("convert data");
 
     /***************CONV0*********************/
     TIME_START;
-    fx = convolution(fx, filters[0], true, head_output);
+    fx = convolution(fx, filters[0], true, buffers.scratch1);
     TIME_END("conv_head");
 
     TIME_START;
-    fx = convolutionDP(fx, filters[1], filters[2]);
+    fx = convolution(convolution(fx, filters[1], false, buffers.scratch0),
+                     filters[2], true, buffers.scratch1);
     TIME_END("conv0");
 
     TIME_START;
-    fx = maxpooling2x2S2(fx);
+    fx = maxpooling2x2S2(fx, buffers.scratch0);
     TIME_END("pool0");
 
     /***************CONV1*********************/
     TIME_START;
-    fx = convolution4layerUnit(fx, filters[3], filters[4], filters[5], filters[6]);
+    fx = backbone_block(fx, filters + 3, buffers.scratch1, buffers.scratch0, buffers.scratch0);
     TIME_END("conv1");
 
     /***************CONV2*********************/
     TIME_START;
-    fx = convolution4layerUnit(fx, filters[7], filters[8], filters[9], filters[10]);
+    fx = backbone_block(fx, filters + 7, buffers.scratch1, buffers.scratch0, buffers.scratch0);
     TIME_END("conv2");
 
     /***************CONV3*********************/
     TIME_START;
-    fx = maxpooling2x2S2(fx);
+    fx = maxpooling2x2S2(fx, buffers.scratch1);
     TIME_END("pool3");
 
     TIME_START;
-    auto fb1 = convolution4layerUnit(fx, filters[11], filters[12], filters[13], filters[14]);
+    auto fb1 = backbone_block(fx, filters + 11, buffers.scratch0, buffers.scratch1, buffers.fb1);
     TIME_END("conv3");
 
     /***************CONV4*********************/
     TIME_START;
-    fx = maxpooling2x2S2(fb1);
+    fx = maxpooling2x2S2(fb1, buffers.scratch1);
     TIME_END("pool4");
 
     TIME_START;
-    auto fb2 = convolution4layerUnit(fx, filters[15], filters[16], filters[17], filters[18]);
+    auto fb2 = backbone_block(fx, filters + 15, buffers.scratch0, buffers.scratch1, buffers.fb2);
     TIME_END("conv4");
 
     /***************CONV5*********************/
     TIME_START;
-    fx = maxpooling2x2S2(fb2);
+    fx = maxpooling2x2S2(fb2, buffers.scratch1);
     TIME_END("pool5");
 
     TIME_START;
-    auto fb3 = convolution4layerUnit(fx, filters[19], filters[20], filters[21], filters[22]);
+    auto fb3 = backbone_block(fx, filters + 19, buffers.scratch0, buffers.scratch1, buffers.fb3);
     TIME_END("conv5");
 
     CDataBlob<float> pred_reg[3], pred_cls[3], pred_kps[3], pred_obj[3];
@@ -230,18 +276,23 @@ std::vector<FaceRect> detect_with_filters(
 
 size_t Face192HeadWorkspace::required_storage_floats()
 {
-    return face192_head_input_floats() +
-           blob_floats(kFace192HeadPixels, param_pConvInfo[0].num_filters);
+    const auto layout = face192_backbone_layout();
+    return layout.first_slot + layout.scratch_slot;
 }
 
 bool Face192HeadWorkspace::Initialize(float* storage, size_t storage_floats)
 {
+    const auto layout = face192_backbone_layout();
     if (ready() || !storage ||
         reinterpret_cast<std::uintptr_t>(storage) % storage_alignment() != 0 ||
-        storage_floats < required_storage_floats()) {
+        storage_floats < layout.first_slot + layout.scratch_slot) {
         return false;
     }
-    storage_ = storage;
+    scratch_[0] = storage;
+    scratch_[1] = storage + layout.first_slot;
+    features_[0] = storage + layout.scratch_slot;
+    features_[1] = features_[0] + layout.feature_floats[0];
+    features_[2] = features_[1] + layout.feature_floats[1];
     return true;
 }
 
@@ -326,7 +377,8 @@ std::vector<FaceRect> objectdetect_cnn_face192(
         return {};
     }
     return detect_with_filters(data, size, size, step, weights.filters_,
-        workspace.storage_, workspace.storage_ + face192_head_input_floats());
+        {workspace.scratch_[0], workspace.scratch_[1],
+         workspace.features_[0], workspace.features_[1], workspace.features_[2]});
 }
 
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!

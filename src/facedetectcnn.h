@@ -452,9 +452,10 @@ public:
     static constexpr size_t storage_alignment() { return _MALLOC_ALIGN / 8; }
     static size_t required_storage_floats();
 
-    // Bind once. The caller keeps storage alive and exclusive to this worker.
+    // Bind the backbone buffers once. Storage must outlive this workspace and
+    // remain exclusive to its worker.
     bool Initialize(float* storage, size_t storage_floats);
-    bool ready() const { return storage_ != nullptr; }
+    bool ready() const { return scratch_[0] != nullptr; }
 
     Face192HeadWorkspace() = default;
     Face192HeadWorkspace(const Face192HeadWorkspace&) = delete;
@@ -464,7 +465,8 @@ private:
     friend std::vector<FaceRect> objectdetect_cnn_face192(
         const unsigned char*, int, const PreparedFaceWeights&, Face192HeadWorkspace&);
 
-    float* storage_ = nullptr;
+    float* scratch_[2]{};
+    float* features_[3]{};
 };
 
 class PreparedFaceWeights
@@ -510,6 +512,7 @@ CDataBlob<float> convolution4layerUnit(const CDataBlob<float>& inputData,
                 const Filters<float>& filtersP1, const Filters<float>& filtersD1, 
                 const Filters<float>& filtersP2, const Filters<float>& filtersD2, bool do_relu = true);
 CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>& inputData);
+CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>& inputData, float* output_storage);
 
 CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2);
 CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData);

@@ -674,6 +674,11 @@ CDataBlob<float> convolution4layerUnit(const CDataBlob<float>& inputData,
 //only 2X2 S2 is supported
 CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData)
 {
+    return maxpooling2x2S2(inputData, nullptr);
+}
+
+CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData, float* output_storage)
+{
     if (inputData.isEmpty())
     {
         std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
@@ -689,7 +694,7 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData)
         exit(1);        
     }
 
-    CDataBlob<float> outputData(outputR, outputC, outputCH);
+    CDataBlob<float> outputData(outputR, outputC, outputCH, output_storage);
     outputData.setZero();
 
     for (int row = 0; row < outputData.rows; row++)
