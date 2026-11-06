@@ -134,6 +134,12 @@ void myFree_(void* ptr)
 
 
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData, int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor) {
+    return setDataFrom3x3S2P1to1x1S1P0FromImage(
+        inputData, imgWidth, imgHeight, imgChannels, imgWidthStep, padDivisor, nullptr);
+}
+
+CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData,
+    int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor, float* output_storage) {
     if (imgChannels != 3) {
         std::cerr << __FUNCTION__ << ": The input image must be a 3-channel RGB image." << std::endl;
         exit(1);
@@ -145,7 +151,7 @@ CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* input
     int rows = ((imgHeight - 1) / padDivisor + 1) * padDivisor / 2;
     int cols = ((imgWidth - 1) / padDivisor + 1 ) * padDivisor / 2;
     int channels = 32;
-    CDataBlob<float> outBlob(rows, cols, channels);
+    CDataBlob<float> outBlob(rows, cols, channels, output_storage);
 
 #if defined(_OPENMP)
 #pragma omp parallel for
@@ -532,6 +538,12 @@ CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1, const CDataBlob<
 
 CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<float>& filters, bool do_relu)
 {
+    return convolution(inputData, filters, do_relu, nullptr);
+}
+
+CDataBlob<float> convolution(const CDataBlob<float>& inputData,
+    const Filters<float>& filters, bool do_relu, float* output_storage)
+{
     if( inputData.isEmpty() || filters.weights.isEmpty() || filters.biases.isEmpty())
     {
         std::cerr << __FUNCTION__ << ": The input data or filter data is empty" << std::endl;
@@ -568,7 +580,7 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<fl
         profiling::TraceLevel::Layer);
 #endif
 
-    CDataBlob<float> outputData(inputData.rows, inputData.cols, filters.num_filters);
+    CDataBlob<float> outputData(inputData.rows, inputData.cols, filters.num_filters, output_storage);
 
 #if defined(FACEDETECTION_ENABLE_PROFILING)
     layer_event.set_arg(

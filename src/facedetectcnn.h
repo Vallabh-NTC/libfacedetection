@@ -151,11 +151,13 @@ public:
         channelStep = 0;
         data = nullptr;
 	}
-	CDataBlob(int r, int c, int ch)
+	CDataBlob(int r, int c, int ch, T* storage = nullptr)
 	{
         data = nullptr;
-        create(r, c, ch);
-        //#warning "confirm later"
+        if (storage)
+            bind(r, c, ch, storage);
+        else
+            create(r, c, ch);
         setZero();
 	}
 	~CDataBlob()
@@ -441,6 +443,30 @@ class Filters{
 
 constexpr int kFaceConvLayers = 53;
 
+class PreparedFaceWeights;
+
+class Face192HeadWorkspace
+{
+public:
+    static constexpr int input_size() { return 192; }
+    static constexpr size_t storage_alignment() { return _MALLOC_ALIGN / 8; }
+    static size_t required_storage_floats();
+
+    // Bind once. The caller keeps storage alive and exclusive to this worker.
+    bool Initialize(float* storage, size_t storage_floats);
+    bool ready() const { return storage_ != nullptr; }
+
+    Face192HeadWorkspace() = default;
+    Face192HeadWorkspace(const Face192HeadWorkspace&) = delete;
+    Face192HeadWorkspace& operator=(const Face192HeadWorkspace&) = delete;
+
+private:
+    friend std::vector<FaceRect> objectdetect_cnn_face192(
+        const unsigned char*, int, const PreparedFaceWeights&, Face192HeadWorkspace&);
+
+    float* storage_ = nullptr;
+};
+
 class PreparedFaceWeights
 {
 public:
@@ -459,6 +485,8 @@ public:
 private:
     friend std::vector<FaceRect> objectdetect_cnn(
         const unsigned char*, int, int, int, const PreparedFaceWeights&);
+    friend std::vector<FaceRect> objectdetect_cnn_face192(
+        const unsigned char*, int, const PreparedFaceWeights&, Face192HeadWorkspace&);
 
     Filters<float> filters_[kFaceConvLayers];
     bool ready_ = false;
@@ -467,9 +495,15 @@ private:
 std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData, int with, int height, int step);
 std::vector<FaceRect> objectdetect_cnn(const unsigned char* rgbImageData,
     int width, int height, int step, const PreparedFaceWeights& weights);
+std::vector<FaceRect> objectdetect_cnn_face192(const unsigned char* rgbImageData,
+    int step, const PreparedFaceWeights& weights, Face192HeadWorkspace& workspace);
 
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData, int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor=32);
+CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData,
+    int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor, float* output_storage);
 CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<float>& filters, bool do_relu = true);
+CDataBlob<float> convolution(const CDataBlob<float>& inputData,
+    const Filters<float>& filters, bool do_relu, float* output_storage);
 CDataBlob<float> convolutionDP(const CDataBlob<float>& inputData, 
                 const Filters<float>& filtersP, const Filters<float>& filtersD, bool do_relu = true);
 CDataBlob<float> convolution4layerUnit(const CDataBlob<float>& inputData, 

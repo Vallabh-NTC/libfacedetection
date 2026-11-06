@@ -65,6 +65,14 @@ size_t blob_floats(int columns, int channels)
            CDataBlob<float>::padded_channel_step(channels) / sizeof(float);
 }
 
+constexpr int kFace192HeadPixels = (Face192HeadWorkspace::input_size() / 2) *
+                                    (Face192HeadWorkspace::input_size() / 2);
+
+size_t face192_head_input_floats()
+{
+    return blob_floats(kFace192HeadPixels, param_pConvInfo[0].channels);
+}
+
 #if defined(FACEDETECTION_ENABLE_POINTWISE_PACKED4X4)
 int packed_channels(const ConvInfoStruct& layer)
 {
@@ -91,15 +99,16 @@ struct LegacyFaceFilters
 
 std::vector<FaceRect> detect_with_filters(
     const unsigned char* rgbImageData, int width, int height, int step,
-    const Filters<float>* filters)
+    const Filters<float>* filters, float* head_input = nullptr, float* head_output = nullptr)
 {
     TIME_START;
-    auto fx = setDataFrom3x3S2P1to1x1S1P0FromImage(rgbImageData, width, height, 3, step);
+    auto fx = setDataFrom3x3S2P1to1x1S1P0FromImage(
+        rgbImageData, width, height, 3, step, 32, head_input);
     TIME_END("convert data");
 
     /***************CONV0*********************/
     TIME_START;
-    fx = convolution(fx, filters[0]);
+    fx = convolution(fx, filters[0], true, head_output);
     TIME_END("conv_head");
 
     TIME_START;
@@ -219,6 +228,23 @@ std::vector<FaceRect> detect_with_filters(
 
 }  // namespace
 
+size_t Face192HeadWorkspace::required_storage_floats()
+{
+    return face192_head_input_floats() +
+           blob_floats(kFace192HeadPixels, param_pConvInfo[0].num_filters);
+}
+
+bool Face192HeadWorkspace::Initialize(float* storage, size_t storage_floats)
+{
+    if (ready() || !storage ||
+        reinterpret_cast<std::uintptr_t>(storage) % storage_alignment() != 0 ||
+        storage_floats < required_storage_floats()) {
+        return false;
+    }
+    storage_ = storage;
+    return true;
+}
+
 size_t PreparedFaceWeights::required_storage_floats()
 {
     size_t count = 0;
@@ -289,6 +315,18 @@ std::vector<FaceRect> objectdetect_cnn(
         return {};
     }
     return detect_with_filters(data, width, height, step, weights.filters_);
+}
+
+std::vector<FaceRect> objectdetect_cnn_face192(
+    const unsigned char* data, int step, const PreparedFaceWeights& weights,
+    Face192HeadWorkspace& workspace)
+{
+    constexpr int size = Face192HeadWorkspace::input_size();
+    if (!data || step < size * 3 || !weights.ready() || !workspace.ready()) {
+        return {};
+    }
+    return detect_with_filters(data, size, size, step, weights.filters_,
+        workspace.storage_, workspace.storage_ + face192_head_input_floats());
 }
 
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!
