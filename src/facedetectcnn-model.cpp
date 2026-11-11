@@ -55,7 +55,11 @@ cv::TickMeter cvtm;
 #endif
 
 
+#ifdef FACE_PREPARED_ONLY
+extern const ConvInfoStruct param_pConvInfo[kFaceConvLayers];
+#else
 extern ConvInfoStruct param_pConvInfo[kFaceConvLayers];
+#endif
 
 namespace {
 
@@ -161,6 +165,7 @@ int packed_channels(const ConvInfoStruct& layer)
 }
 #endif
 
+#ifndef FACE_PREPARED_ONLY
 struct LegacyFaceFilters
 {
     Filters<float> filters[kFaceConvLayers];
@@ -176,6 +181,8 @@ struct LegacyFaceFilters
         }
     }
 };
+
+#endif
 
 struct DecodedPredictions
 {
@@ -306,6 +313,7 @@ DecodedPredictions decode_with_filters(
     return decoded;
 }
 
+#ifndef FACE_PREPARED_ONLY
 std::vector<FaceRect> detect_with_filters(
     const unsigned char* data, int width, int height, int step,
     const Filters<float>* filters, const InferenceBuffers& buffers = {})
@@ -317,6 +325,8 @@ std::vector<FaceRect> detect_with_filters(
     TIME_END("detection output")
     return faces;
 }
+
+#endif
 
 }  // namespace
 
@@ -398,6 +408,7 @@ bool PreparedFaceWeights::Initialize(float* storage, size_t storage_floats)
     return true;
 }
 
+#ifndef FACE_PREPARED_ONLY
 std::vector<FaceRect> objectdetect_cnn(
     const unsigned char* data, int width, int height, int step)
 {
@@ -435,6 +446,8 @@ std::vector<FaceRect> objectdetect_cnn_face192(
          workspace.predictions_});
 }
 
+#endif
+
 bool objectdetect_cnn_face192_into(const unsigned char* data, int step,
     const PreparedFaceWeights& weights, Face192HeadWorkspace& workspace,
     Face192PostprocessWorkspace& postprocess)
@@ -451,6 +464,7 @@ bool objectdetect_cnn_face192_into(const unsigned char* data, int step,
     return postprocess.Decode(decoded.cls, decoded.reg, decoded.kps, decoded.obj);
 }
 
+#ifndef FACE_PREPARED_ONLY
 int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing face detection results, !!its size must be FACEDETECTION_RESULT_BUFFER_SIZE Bytes!!
     unsigned char * rgb_image_data, int width, int height, int step) //input image, it must be BGR (three-channel) image!
 {
@@ -492,3 +506,5 @@ int* facedetect_cnn(unsigned char * result_buffer, //buffer memory for storing f
 
     return pCount;
 }
+
+#endif

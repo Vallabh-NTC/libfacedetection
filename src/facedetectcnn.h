@@ -94,8 +94,17 @@ DO NOT EDIT the following code if you don't really understand it.
 
 #include <string.h>
 #include <vector>
+#include <algorithm>
+#include <new>
+#include <utility>
+#ifndef FACE_PREPARED_ONLY
 #include <iostream>
 #include <typeinfo>
+#endif
+
+#if defined(FACE_PREPARED_ONLY) && (defined(FACEDETECTION_ENABLE_PROFILING) || defined(_OPENMP))
+#error "Prepared-only face build requires profiling and OpenMP disabled"
+#endif
 
 void* myAlloc(size_t size);
 void myFree_(void* ptr);
@@ -125,8 +134,13 @@ typedef struct ConvInfoStruct_ {
     bool is_depthwise;
     bool is_pointwise;
     bool with_relu;
+#ifdef FACE_PREPARED_ONLY
+    const float* pWeights;
+    const float* pBiases;
+#else
     float* pWeights;
     float* pBiases;
+#endif
 }ConvInfoStruct;
 
 
@@ -183,8 +197,10 @@ public:
 
     void setNULL()
     {
+#ifndef FACE_PREPARED_ONLY
         if (data && owns_data_)
             myFree(&data);
+#endif
         owns_data_ = true;
         rows = cols = channels = channelStep = 0;
         data = nullptr;
@@ -220,6 +236,11 @@ public:
         owns_data_ = false;
     }
 
+#ifdef FACE_PREPARED_ONLY
+    // No allocation fallback: only bind() or a non-null constructor storage
+    // argument can create a usable tensor in this configuration.
+    bool create(int, int, int) { setNULL(); return false; }
+#else
 	bool create(int r, int c, int ch)
 	{
         setNULL();
@@ -263,6 +284,8 @@ public:
         return true;
 	}
 
+#endif
+
     inline T * ptr(int r, int c)
     {
         if( r < 0 || r >= this->rows || c < 0 || c >= this->cols )
@@ -294,6 +317,7 @@ public:
         return (T)(0);
     }
 
+#ifndef FACE_PREPARED_ONLY
     friend std::ostream &operator<<(std::ostream &output, CDataBlob &dataBlob)
     {
         output << "DataBlob Size (channels, rows, cols) = ("
@@ -358,6 +382,7 @@ public:
         }
         return output;
     }
+#endif
 };
 
 template <typename T>
@@ -402,6 +427,7 @@ class Filters{
         memcpy(biases.ptr(0, 0), convinfo.pBiases, num_filters * sizeof(T));
     }
 
+#ifndef FACE_PREPARED_ONLY
     Filters & operator=(ConvInfoStruct & convinfo)
     {
         if (typeid(float) != typeid(T))
@@ -439,6 +465,7 @@ class Filters{
         return *this;
     }
 
+#endif
 };
 
 constexpr int kFaceConvLayers = 53;

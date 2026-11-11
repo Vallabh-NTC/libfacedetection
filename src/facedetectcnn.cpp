@@ -44,6 +44,12 @@ the use of this software, even if advised of the possibility of such damage.
 #include <algorithm>//for stable_sort, sort
 #include <string>
 
+#ifdef FACE_PREPARED_ONLY
+#define FACE_DIAGNOSTIC(expression) do {} while (false)
+#else
+#define FACE_DIAGNOSTIC(expression) do { expression; } while (false)
+#endif
+
 #if defined(FACEDETECTION_ENABLE_PROFILING)
 #include "profiling/trace_recorder.hpp"
 #endif
@@ -105,6 +111,7 @@ const char* convolution_operation_name(const Filters<float>& filters)
 #endif
 
 
+#ifndef FACE_PREPARED_ONLY
 void* myAlloc(size_t size)
 {
     char *ptr, *ptr0;
@@ -138,15 +145,28 @@ CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* input
         inputData, imgWidth, imgHeight, imgChannels, imgWidthStep, padDivisor, nullptr);
 }
 
+#endif
+
 CDataBlob<float> setDataFrom3x3S2P1to1x1S1P0FromImage(const unsigned char* inputData,
     int imgWidth, int imgHeight, int imgChannels, int imgWidthStep, int padDivisor, float* output_storage) {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     if (imgChannels != 3) {
-        std::cerr << __FUNCTION__ << ": The input image must be a 3-channel RGB image." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input image must be a 3-channel RGB image." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     if (padDivisor != 32) {
-        std::cerr << __FUNCTION__ << ": This version need pad of 32" << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": This version need pad of 32" << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     int rows = ((imgHeight - 1) / padDivisor + 1) * padDivisor / 2;
     int cols = ((imgWidth - 1) / padDivisor + 1 ) * padDivisor / 2;
@@ -414,7 +434,7 @@ bool relu(CDataBlob<float> & inputoutputData)
 {
     if( inputoutputData.isEmpty() )
     {
-        std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl);
         return false;
     }
     
@@ -495,14 +515,24 @@ bool SortScoreBBoxPairDescend(const std::pair<float, NormalizedBBox>& pair1,   c
 }
 
 
+#ifndef FACE_PREPARED_ONLY
 CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData) {
     return upsampleX2(inputData, nullptr);
 }
 
+#endif
+
 CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData, float* output_storage) {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     if (inputData.isEmpty()) {
-        std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     CDataBlob<float> outData(inputData.rows * 2, inputData.cols * 2, inputData.channels, output_storage);
@@ -523,15 +553,25 @@ CDataBlob<float> upsampleX2(const CDataBlob<float>& inputData, float* output_sto
     return outData;
 }
 
+#ifndef FACE_PREPARED_ONLY
 CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2) {
     return elementAdd(inputData1, inputData2, nullptr);
 }
 
+#endif
+
 CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1,
     const CDataBlob<float>& inputData2, float* output_storage) {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     if (inputData1.rows != inputData2.rows || inputData1.cols != inputData2.cols || inputData1.channels != inputData2.channels) {
-        std::cerr << __FUNCTION__ << ": The two input datas must be in the same shape." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The two input datas must be in the same shape." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     CDataBlob<float> outData(inputData1.rows, inputData1.cols, inputData1.channels, output_storage);
     for (int r = 0; r < inputData1.rows; r++) {
@@ -545,23 +585,37 @@ CDataBlob<float> elementAdd(const CDataBlob<float>& inputData1,
     return outData;
 }
 
+#ifndef FACE_PREPARED_ONLY
 CDataBlob<float> convolution(const CDataBlob<float>& inputData, const Filters<float>& filters, bool do_relu)
 {
     return convolution(inputData, filters, do_relu, nullptr);
 }
 
+#endif
+
 CDataBlob<float> convolution(const CDataBlob<float>& inputData,
     const Filters<float>& filters, bool do_relu, float* output_storage)
 {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     if( inputData.isEmpty() || filters.weights.isEmpty() || filters.biases.isEmpty())
     {
-        std::cerr << __FUNCTION__ << ": The input data or filter data is empty" << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data or filter data is empty" << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     if( inputData.channels != filters.channels)
     {
-        std::cerr << __FUNCTION__ << ": The input data dimension cannot meet filters: " << inputData.channels << " vs " << filters.channels << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data dimension cannot meet filters: " << inputData.channels << " vs " << filters.channels << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
 #if defined(FACEDETECTION_ENABLE_PROFILING)
@@ -640,8 +694,12 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData,
     }
     else
     {
-        std::cerr << __FUNCTION__ << ": Unsupported filter type." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": Unsupported filter type." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     if(do_relu)
@@ -662,6 +720,7 @@ CDataBlob<float> convolution(const CDataBlob<float>& inputData,
     return outputData;
 }
 
+#ifndef FACE_PREPARED_ONLY
 CDataBlob<float> convolutionDP(const CDataBlob<float>& inputData, 
                 const Filters<float>& filtersP, const Filters<float>& filtersD, bool do_relu)
 {
@@ -686,12 +745,21 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData)
     return maxpooling2x2S2(inputData, nullptr);
 }
 
+#endif
+
 CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData, float* output_storage)
 {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     if (inputData.isEmpty())
     {
-        std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     int outputR = static_cast<int>(ceil((inputData.rows - 3.0f) / 2)) + 1;
     int outputC = static_cast<int>(ceil((inputData.cols - 3.0f) / 2)) + 1;
@@ -699,8 +767,12 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData, float* output
 
     if (outputR < 1 || outputC < 1)
     {
-        std::cerr << __FUNCTION__ << ": The size of the output is not correct. (" << outputR << ", " << outputC << ")." << std::endl;
-        exit(1);        
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The size of the output is not correct. (" << outputR << ", " << outputC << ")." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
+        exit(1);
+#endif        
     }
 
     CDataBlob<float> outputData(outputR, outputC, outputCH, output_storage);
@@ -781,12 +853,18 @@ CDataBlob<float> maxpooling2x2S2(const CDataBlob<float>&inputData, float* output
     return outputData;
 }
 
+#ifndef FACE_PREPARED_ONLY
 CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride, float offset) {
     return meshgrid(feature_width, feature_height, stride, offset, nullptr);
 }
 
+#endif
+
 CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride,
     float offset, float* output_storage) {
+#ifdef FACE_PREPARED_ONLY
+    if (!output_storage) return {};
+#endif
     CDataBlob<float> out(feature_height, feature_width, 2, output_storage);
     for(int r = 0; r < feature_height; ++r) {
         float rx = (float)(r * stride) + offset;
@@ -801,12 +879,18 @@ CDataBlob<float> meshgrid(int feature_width, int feature_height, int stride,
 
 void bbox_decode(CDataBlob<float>& bbox_pred, const CDataBlob<float>& priors, int stride) {
     if(bbox_pred.cols != priors.cols || bbox_pred.rows != priors.rows) {
-        std::cerr << __FUNCTION__ << ": Mismatch between feature map and anchor size. (" \
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": Mismatch between feature map and anchor size. (" \
         << (bbox_pred.rows) << ", " << (bbox_pred.cols) << ") vs (" \
-        << (priors.rows) << ", " << (priors.cols) << ")." << std::endl;
+        << (priors.rows) << ", " << (priors.cols) << ")." << std::endl);
+#ifdef FACE_PREPARED_ONLY
+        return;
+#endif
     }
     if(bbox_pred.channels != 4) {
-        std::cerr << __FUNCTION__ << ": The bbox dim must be 4."  << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The bbox dim must be 4."  << std::endl);
+#ifdef FACE_PREPARED_ONLY
+        return;
+#endif
     }
     float fstride = (float)stride;
     for(int r = 0; r < bbox_pred.rows; ++r) {
@@ -827,12 +911,20 @@ void bbox_decode(CDataBlob<float>& bbox_pred, const CDataBlob<float>& priors, in
 
 void kps_decode(CDataBlob<float>& kps_pred, const CDataBlob<float>& priors, int stride) {
     if(kps_pred.cols != priors.cols || kps_pred.rows != priors.rows) {
-        std::cerr << __FUNCTION__ << ": Mismatch between feature map and anchor size." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": Mismatch between feature map and anchor size." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return;
+#else
         exit(1);
+#endif
     }
     if(kps_pred.channels & 1) {
-        std::cerr << __FUNCTION__ << ": The kps dim must be even." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The kps dim must be even." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return;
+#else
         exit(1);
+#endif
     }
     float fstride = (float)stride;
     int num_points = kps_pred.channels >> 1;
@@ -849,13 +941,18 @@ void kps_decode(CDataBlob<float>& kps_pred, const CDataBlob<float>& priors, int 
     }
 }
 
+#ifndef FACE_PREPARED_ONLY
 template<typename T>
 CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputData2, const CDataBlob<T>& inputData3)
 {
     if ((inputData1.isEmpty()) || (inputData2.isEmpty()) || (inputData3.isEmpty()))
     {
-        std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     if ((inputData1.cols != inputData2.cols) ||
@@ -863,8 +960,12 @@ CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputDa
         (inputData1.cols != inputData3.cols) ||
         (inputData1.rows != inputData3.rows))
     {
-        std::cerr << __FUNCTION__ << ": The three inputs must have the same size." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The three inputs must have the same size." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     int outputR = inputData1.rows;
     int outputC = inputData1.cols;
@@ -872,8 +973,12 @@ CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputDa
 
     if (outputR < 1 || outputC < 1 || outputCH < 1)
     {
-        std::cerr << __FUNCTION__ << ": The size of the output is not correct. (" << outputR << ", " << outputC << ", " << outputCH << ")." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The size of the output is not correct. (" << outputR << ", " << outputC << ", " << outputCH << ")." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     CDataBlob<T> outputData(outputR, outputC, outputCH);
@@ -896,6 +1001,8 @@ CDataBlob<T> concat3(const CDataBlob<T>& inputData1, const CDataBlob<T>& inputDa
 }
 template CDataBlob<float> concat3(const CDataBlob<float>& inputData1, const CDataBlob<float>& inputData2, const CDataBlob<float>& inputData3);
 
+#endif
+
 namespace {
 
 template<typename T>
@@ -911,13 +1018,18 @@ void copy_flattened(const CDataBlob<T>& input, T* output)
 
 }  // namespace
 
+#ifndef FACE_PREPARED_ONLY
 template<typename T>
 CDataBlob<T> blob2vector(const CDataBlob<T> &inputData)
 {
     if (inputData.isEmpty())
     {
-        std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is empty." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     CDataBlob<T> outputData(1, 1, inputData.cols * inputData.rows * inputData.channels);
@@ -927,12 +1039,18 @@ CDataBlob<T> blob2vector(const CDataBlob<T> &inputData)
 }
 template CDataBlob<float> blob2vector(const CDataBlob<float>& inputData);
 
+#endif
+
 CDataBlob<float> flatten_predictions(const CDataBlob<float> (&predictions)[3],
     float* output_storage)
 {
     if (!output_storage) {
+#ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         return concat3(blob2vector(predictions[0]), blob2vector(predictions[1]),
                        blob2vector(predictions[2]));
+#endif
     }
     int channels = 0;
     for (const auto& prediction : predictions) {
@@ -979,6 +1097,7 @@ FaceRect make_face_rect(float score, const NormalizedBBox& box)
 
 }  // namespace
 
+#ifndef FACE_PREPARED_ONLY
 std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
                       const CDataBlob<float>& reg,
                       const CDataBlob<float>& kps,
@@ -990,17 +1109,29 @@ std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
 {
     if (reg.isEmpty() || cls.isEmpty() || kps.isEmpty() || obj.isEmpty())//|| iou.isEmpty())
     {
-        std::cerr << __FUNCTION__ << ": The input data is null." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": The input data is null." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
     if(reg.cols != 1 || reg.rows!= 1 || cls.cols != 1 || cls.rows!= 1 || kps.cols != 1 || kps.rows!= 1 || obj.cols != 1 || obj.rows!= 1) {
-        std::cerr << __FUNCTION__ << ": Only support vector format." << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": Only support vector format." << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     if((int)(kps.channels / obj.channels) != 10) {
-        std::cerr << __FUNCTION__ << ": Only support 5 keypoints. (" << kps.channels << ")" << std::endl;
+        FACE_DIAGNOSTIC(std::cerr << __FUNCTION__ << ": Only support 5 keypoints. (" << kps.channels << ")" << std::endl);
+        #ifdef FACE_PREPARED_ONLY
+        return {};
+#else
         exit(1);
+#endif
     }
 
     const float* pCls = cls.ptr(0, 0);
@@ -1079,6 +1210,8 @@ std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
     return facesInfo;
 }
 
+
+#endif
 
 bool Face192PostprocessWorkspace::Decode(const CDataBlob<float>& cls,
     const CDataBlob<float>& reg, const CDataBlob<float>& kps,
