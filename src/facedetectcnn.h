@@ -541,6 +541,7 @@ public:
         const CDataBlob<float>& kps, const CDataBlob<float>& obj);
     const FaceRect* results() const { return results_; }
     size_t count() const { return count_; }
+    void ClearFrameData() noexcept;
 
 private:
     friend bool objectdetect_cnn_face192_into(const unsigned char*, int,

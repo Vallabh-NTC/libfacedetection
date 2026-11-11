@@ -1213,6 +1213,18 @@ std::vector<FaceRect> detection_output(const CDataBlob<float>& cls,
 
 #endif
 
+void Face192PostprocessWorkspace::ClearFrameData() noexcept
+{
+    const auto clear = [](void* memory, size_t bytes) {
+        volatile unsigned char* p = static_cast<unsigned char*>(memory);
+        for (size_t n = 0; n < bytes; ++n) p[n] = 0;
+    };
+    clear(candidates_, sizeof(candidates_));
+    clear(sort_scratch_, sizeof(sort_scratch_));
+    clear(results_, sizeof(results_));
+    count_ = 0;
+}
+
 bool Face192PostprocessWorkspace::Decode(const CDataBlob<float>& cls,
     const CDataBlob<float>& reg, const CDataBlob<float>& kps,
     const CDataBlob<float>& obj)
